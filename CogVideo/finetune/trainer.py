@@ -186,10 +186,12 @@ class Trainer:
     def _freeze_and_move_models(self) -> None:
         self.components.vae.requires_grad_(False)
         self.components.text_encoder.requires_grad_(False)
+        self.components.dino_model.requires_grad_(False)
 
         device, dtype = self.accelerator.device, self.state.weight_dtype
         self.components.vae = self.components.vae.to(device, dtype=dtype)
         self.components.text_encoder = self.components.text_encoder.to(device, dtype=dtype)
+        self.components.dino_model = self.components.dino_model.to(device)
 
     def _build_datasets(self):
         train_jsonl = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/10000maze_720_480/info_labels.jsonl"

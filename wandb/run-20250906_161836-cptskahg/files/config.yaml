@@ -1,0 +1,255 @@
+_wandb:
+    value:
+        cli_version: 0.21.3
+        e:
+            c5ibzbnab54npbeont1xyu42z7792067:
+                args:
+                    - --model_path
+                    - /project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/CogVideoX-2b
+                    - --model_name
+                    - cogvideox-t2v
+                    - --model_type
+                    - t2v
+                    - --training_type
+                    - sft
+                    - --dino_path
+                    - /project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/dinov3-vit7b16-pretrain-lvd1689m
+                    - --output_dir
+                    - /project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca-dino
+                    - --report_to
+                    - wandb
+                    - --data_root
+                    - /absolute/path/to/your/data_root
+                    - --caption_column
+                    - prompt.txt
+                    - --video_column
+                    - videos.txt
+                    - --train_resolution
+                    - 49x480x720
+                    - --train_epochs
+                    - "10"
+                    - --seed
+                    - "42"
+                    - --batch_size
+                    - "1"
+                    - --gradient_accumulation_steps
+                    - "1"
+                    - --mixed_precision
+                    - fp16
+                    - --num_workers
+                    - "0"
+                    - --pin_memory
+                    - "True"
+                    - --nccl_timeout
+                    - "1800"
+                    - --checkpointing_steps
+                    - "5000"
+                    - --checkpointing_limit
+                    - "2"
+                    - --do_validation
+                    - "true"
+                    - --validation_dir
+                    - /absolute/path/to/validation_set
+                    - --validation_steps
+                    - "5000"
+                    - --validation_prompts
+                    - prompts.txt
+                    - --gen_fps
+                    - "16"
+                cpu_count: 64
+                cpu_count_logical: 64
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "706906136576"
+                        used: "589302448128"
+                email: ethan.wang.cs@gmail.com
+                executable: /home/jqf8qm/miniforge3/envs/spadiff2/bin/python3.11
+                git:
+                    commit: 64e8a7fdaddbd50616b15bd49f882cb099a61103
+                    remote: https://github.com/EthanWTL/SpaDiff_Sep3.git
+                gpu: NVIDIA H200 NVL
+                gpu_count: 8
+                gpu_nvidia:
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-39ec8fd5-ed59-4721-f559-60a7129451e1
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-e13c2d26-bec3-f45a-94e6-09caa53f8a7c
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-2f72a3c6-c696-4aba-3279-f441111aed40
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-43259f91-babc-9cd7-3169-dcb2011b3fec
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-a8754d8e-1fed-4480-33cb-790b7bf6fc4d
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-9b74076f-8695-86e1-5b00-cff9c4aed9c7
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-a3082659-0380-a2f0-8968-0eff306c63ea
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200 NVL
+                      uuid: GPU-a4cc56f6-7107-bdf3-4fca-b6288e938845
+                host: udc-an25-1
+                memory:
+                    total: "2434680487936"
+                os: Linux-4.18.0-553.47.1.el8_10.x86_64-x86_64-with-glibc2.28
+                program: /project/sds-rise/ethan/SpaDiff_Sep3/CogVideo/finetune/train.py
+                python: CPython 3.11.0
+                root: /sfs/gpfs/tardis/project/sds-rise/ethan/SpaDiff_Sep3
+                startedAt: "2025-09-06T20:18:36.517469Z"
+                writerId: c5ibzbnab54npbeont1xyu42z7792067
+        m: []
+        python_version: 3.11.0
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+                - 98
+                - 105
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+                - 98
+                - 105
+            "4": 3.11.0
+            "5": 0.21.3
+            "6": 4.56.1
+            "12": 0.21.3
+            "13": linux-x86_64
+batch_size:
+    value: 1
+beta1:
+    value: 0.9
+beta2:
+    value: 0.95
+beta3:
+    value: 0.98
+caption_column:
+    value: prompt.txt
+checkpointing_limit:
+    value: 2
+checkpointing_steps:
+    value: 5000
+data_root:
+    value: /absolute/path/to/your/data_root
+dino_path:
+    value: /project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/dinov3-vit7b16-pretrain-lvd1689m
+do_validation:
+    value: true
+enable_slicing:
+    value: true
+enable_tiling:
+    value: true
+epsilon:
+    value: 1e-08
+gen_fps:
+    value: 16
+gradient_accumulation_steps:
+    value: 1
+gradient_checkpointing:
+    value: true
+image_column:
+    value: null
+learning_rate:
+    value: 2e-05
+lora_alpha:
+    value: 64
+lr_num_cycles:
+    value: 1
+lr_power:
+    value: 1
+lr_scheduler:
+    value: constant_with_warmup
+lr_warmup_steps:
+    value: 100
+max_grad_norm:
+    value: 1
+mixed_precision:
+    value: fp16
+model_name:
+    value: cogvideox-t2v
+model_path:
+    value: /project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/CogVideoX-2b
+model_type:
+    value: t2v
+nccl_timeout:
+    value: 1800
+num_workers:
+    value: 0
+optimizer:
+    value: adamw
+output_dir:
+    value: /project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca-dino
+pin_memory:
+    value: true
+rank:
+    value: 128
+report_to:
+    value: wandb
+resume_from_checkpoint:
+    value: null
+seed:
+    value: 42
+target_modules:
+    value:
+        - to_q
+        - to_k
+        - to_v
+        - to_out.0
+tracker_name:
+    value: SpaDiff-dino
+train_epochs:
+    value: 10
+train_resolution:
+    value:
+        - 49
+        - 480
+        - 720
+train_steps:
+    value: 104740
+training_type:
+    value: sft
+validation_dir:
+    value: /absolute/path/to/validation_set
+validation_images:
+    value: null
+validation_prompts:
+    value: prompts.txt
+validation_steps:
+    value: 5000
+validation_videos:
+    value: null
+video_column:
+    value: videos.txt
+weight_decay:
+    value: 0.0001

@@ -9,12 +9,13 @@ MODEL_ARGS=(
     --model_name "cogvideox-t2v"  # ["cogvideox-t2v"]
     --model_type "t2v"
     --training_type "sft"
+    --dino_path "/project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/dinov3-vit7b16-pretrain-lvd1689m"
 )
 
 # Output Configuration
 OUTPUT_ARGS=(
-    --output_dir "/project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca"
-    --report_to "tensorboard"
+    --output_dir "/project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca-dino"
+    --report_to "wandb"
 )
 
 # Data Configuration
@@ -46,7 +47,7 @@ SYSTEM_ARGS=(
 
 # Checkpointing Configuration
 CHECKPOINT_ARGS=(
-    --checkpointing_steps 10 # save checkpoint every x steps
+    --checkpointing_steps 5000 # save checkpoint every x steps
     --checkpointing_limit 2 # maximum number of checkpoints to keep, after which the oldest one is deleted
     # --resume_from_checkpoint "/absolute/path/to/checkpoint_dir"  # if you want to resume from a checkpoint, otherwise, comment this line
 )
@@ -55,7 +56,7 @@ CHECKPOINT_ARGS=(
 VALIDATION_ARGS=(
     --do_validation true  # ["true", "false"]
     --validation_dir "/absolute/path/to/validation_set"
-    --validation_steps 20  # should be multiple of checkpointing_steps
+    --validation_steps 5000  # should be multiple of checkpointing_steps
     --validation_prompts "prompts.txt"
     --gen_fps 16
 )

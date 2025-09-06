@@ -26,3 +26,7 @@ class Components(BaseModel):
 
     # Scheduler
     scheduler: Any = None
+
+    #dino_process
+    #dino_processor: Any = None
+    dino_model: Any = None

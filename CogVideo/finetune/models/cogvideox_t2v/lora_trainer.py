@@ -18,8 +18,8 @@ from finetune.utils import unwrap_model
 
 from ..utils import register
 
-from subclasses.cogvideox_2b_transformer_imgproj import CogVideoXTransformer3DWithImgProj
-
+from subclasses.cogvideox_2b_transformer_dinoproj import CogVideoXTransformer3DWithDinoProj
+from transformers import AutoImageProcessor, AutoModel
 
 class CogVideoXT2VLoraTrainer(Trainer):
     UNLOAD_LIST = ["text_encoder", "vae"]
@@ -28,6 +28,7 @@ class CogVideoXT2VLoraTrainer(Trainer):
     def load_components(self) -> Components:
         components = Components()
         model_path = str(self.args.model_path)
+        dino_path = str(self.args.dino_path)
 
         components.pipeline_cls = CogVideoXPipeline
 
@@ -37,7 +38,7 @@ class CogVideoXT2VLoraTrainer(Trainer):
             model_path, subfolder="text_encoder"
         )
 
-        components.transformer = CogVideoXTransformer3DWithImgProj.from_pretrained(
+        components.transformer = CogVideoXTransformer3DWithDinoProj.from_pretrained(
             model_path, subfolder="transformer", low_cpu_mem_usage=False
         )
 
@@ -46,6 +47,10 @@ class CogVideoXT2VLoraTrainer(Trainer):
         components.scheduler = CogVideoXDPMScheduler.from_pretrained(
             model_path, subfolder="scheduler"
         )
+
+        #components.dino_processor = AutoImageProcessor.from_pretrained(dino_path, do_resize=False,do_center_crop=False,)
+
+        components.dino_model = AutoModel.from_pretrained(dino_path)
 
         return components
 
@@ -84,6 +89,37 @@ class CogVideoXT2VLoraTrainer(Trainer):
             prompt_token_ids.to(self.accelerator.device)
         )[0]
         return prompt_embedding
+    
+    def _imnet_normalize(self, x01: torch.Tensor) -> torch.Tensor:
+        # x01: [B,3,H,W] in [0,1]
+        mean = torch.tensor([0.485, 0.456, 0.406], device=x01.device, dtype=x01.dtype)[None, :, None, None]
+        std  = torch.tensor([0.229, 0.224, 0.225], device=x01.device, dtype=x01.dtype)[None, :, None, None]
+        return (x01 - mean) / std
+
+    @torch.no_grad()
+    def encode_dino(self, images: torch.Tensor):
+        """
+        images: [B,3,H,W] ImageNet-normalized (no resize/crop).
+        Returns:
+        - mode='cls'  -> [B,D]
+        - mode='patch'-> [B,Hp,Wp,D] with Hp=H//16, Wp=W//16; drops special tokens.
+        """
+        dino = self.components.dino_model
+        H, W = images.shape[-2:]
+        Hp, Wp = H // 16, W // 16
+
+        with self.accelerator.autocast():
+            out = dino(pixel_values=images, return_dict=True)
+            hs = out.last_hidden_state  # [B, N, D]
+
+        # figure out #special tokens robustly
+        B, N, D = hs.shape
+        n_patches = Hp * Wp
+        n_special = N - n_patches  # e.g., 5 for DINOv3 (CLS + 4 registers)
+        patch_tokens = hs[:, n_special:, :]  # [B, n_patches, D]
+
+        # cast output to training dtype (e.g., fp16)
+        return patch_tokens.to(dtype=self.state.weight_dtype)
 
     @override
     def collate_fn(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -106,8 +142,6 @@ class CogVideoXT2VLoraTrainer(Trainer):
         # Updated for maze dataloader format
         prompts = batch["prompt"]  # List of text strings
         flow_videos = batch["flow_hsv"]  # [B, T, 3, H, W] - optical flow sequences (already has 3 channels)
-        # Check the shape of the flow_videos
-        assert flow_videos.shape[2] == 3, f"Expected 3 channels, got {flow_videos.shape[2]}"
         images = batch["image"]  # [B, 3, H, W] - already normalized to [-1, 1]
         
         batch_size = flow_videos.shape[0]
@@ -131,7 +165,12 @@ class CogVideoXT2VLoraTrainer(Trainer):
         # Ensure all tensors are on the same device
         prompt_embedding = prompt_embedding.to(device=self.accelerator.device, dtype=self.state.weight_dtype)
         images = images.to(device=self.accelerator.device, dtype=self.state.weight_dtype)
-
+        
+        images01 = (images.float() + 1.0) / 2.0           # [0,1] in fp32
+        images_dino = self._imnet_normalize(images01)     # fp32 normalize
+        images_dino = images_dino.to(self.accelerator.device, dtype=self.state.weight_dtype)
+        images_patch_token = self.encode_dino(images=images_dino)
+        breakpoint()
         # Shape of prompt_embedding: [B, seq_len, hidden_size]
         # Shape of latent: [B, C, F, H, W]
         # Shape of images: [B, C, H, W]
@@ -150,6 +189,7 @@ class CogVideoXT2VLoraTrainer(Trainer):
         _, seq_len, _ = prompt_embedding.shape
         prompt_embedding = prompt_embedding.view(batch_size, seq_len, -1).to(dtype=latent.dtype)
 
+        """
         # Add frame dimension to images [B,C,H,W] -> [B,C,F,H,W]
         images = images.unsqueeze(2)
         # Add noise to images
@@ -164,6 +204,7 @@ class CogVideoXT2VLoraTrainer(Trainer):
             noisy_images.to(dtype=self.components.vae.dtype)
         ).latent_dist
         image_latents = image_latent_dist.sample() * self.components.vae.config.scaling_factor
+        """
 
         # Sample a random timestep for each sample
         timesteps = torch.randint(
@@ -176,16 +217,19 @@ class CogVideoXT2VLoraTrainer(Trainer):
 
         # from [B, C, F, H, W] to [B, F, C, H, W]
         latent = latent.permute(0, 2, 1, 3, 4)
+        """
         image_latents = image_latents.permute(0, 2, 1, 3, 4)
         assert (latent.shape[0], *latent.shape[2:]) == (
             image_latents.shape[0],
             *image_latents.shape[2:],
         )
 
+
         # Padding image_latents to the same frame number as latent
         padding_shape = (latent.shape[0], latent.shape[1] - 1, *latent.shape[2:])
         latent_padding = image_latents.new_zeros(padding_shape)
         image_latents = torch.cat([image_latents, latent_padding], dim=1)
+                """
 
         # Add noise to latent
         noise = torch.randn_like(latent)
@@ -220,7 +264,7 @@ class CogVideoXT2VLoraTrainer(Trainer):
         predicted_noise = self.components.transformer(
             hidden_states=latent_noisy,
             encoder_hidden_states=prompt_embedding,
-            img_hidden_states=image_latents,
+            img_hidden_states=images_patch_token,
             timestep=timesteps,
             ofs=ofs_emb,
             image_rotary_emb=rotary_emb,

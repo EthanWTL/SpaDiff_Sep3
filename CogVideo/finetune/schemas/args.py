@@ -13,11 +13,12 @@ class Args(BaseModel):
     model_name: str
     model_type: Literal["i2v", "t2v"]
     training_type: Literal["lora", "sft"] = "lora"
+    dino_path: Path
 
     ########## Output ##########
     output_dir: Path = Path("train_results/{:%Y-%m-%d-%H-%M-%S}".format(datetime.datetime.now()))
     report_to: Literal["tensorboard", "wandb", "all"] | None = None
-    tracker_name: str = "finetrainer-cogvideo"
+    tracker_name: str = "SpaDiff-dino"
 
     ########## Data ###########
     data_root: Path
@@ -180,6 +181,7 @@ class Args(BaseModel):
         """Parse command line arguments and return Args instance"""
         parser = argparse.ArgumentParser()
         # Required arguments
+        parser.add_argument("--dino_path", type=str, required=True)
         parser.add_argument("--model_path", type=str, required=True)
         parser.add_argument("--model_name", type=str, required=True)
         parser.add_argument("--model_type", type=str, required=True)
