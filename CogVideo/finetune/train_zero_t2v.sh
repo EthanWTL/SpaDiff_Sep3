@@ -5,15 +5,15 @@ export TOKENIZERS_PARALLELISM=false
 
 # Model Configuration
 MODEL_ARGS=(
-    --model_path "THUDM/CogVideoX1.5-5B"
-    --model_name "cogvideox1.5-t2v"  # ["cogvideox-t2v"]
+    --model_path "/project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/CogVideoX-2b"
+    --model_name "cogvideox-t2v"  # ["cogvideox-t2v"]
     --model_type "t2v"
     --training_type "sft"
 )
 
 # Output Configuration
 OUTPUT_ARGS=(
-    --output_dir "/absolute/path/to/your/output_dir"
+    --output_dir "/project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca"
     --report_to "tensorboard"
 )
 
@@ -22,7 +22,7 @@ DATA_ARGS=(
     --data_root "/absolute/path/to/your/data_root"
     --caption_column "prompt.txt"
     --video_column "videos.txt"
-    --train_resolution "81x768x1360"  # (frames x height x width), frames should be 8N+1 and height, width should be multiples of 16
+    --train_resolution "49x480x720"  # (frames x height x width), frames should be 8N+1 and height, width should be multiples of 16
 )
 
 # Training Configuration
@@ -33,13 +33,13 @@ TRAIN_ARGS=(
     #########   Please keep consistent with deepspeed config file ##########
     --batch_size 1
     --gradient_accumulation_steps 1
-    --mixed_precision "bf16"  # ["no", "fp16"] Only CogVideoX-2B supports fp16 training
+    --mixed_precision "fp16"  # ["no", "fp16"] Only CogVideoX-2B supports fp16 training
     ########################################################################
 )
 
 # System Configuration
 SYSTEM_ARGS=(
-    --num_workers 8
+    --num_workers 0
     --pin_memory True
     --nccl_timeout 1800
 )
@@ -53,7 +53,7 @@ CHECKPOINT_ARGS=(
 
 # Validation Configuration
 VALIDATION_ARGS=(
-    --do_validation false  # ["true", "false"]
+    --do_validation true  # ["true", "false"]
     --validation_dir "/absolute/path/to/validation_set"
     --validation_steps 20  # should be multiple of checkpointing_steps
     --validation_prompts "prompts.txt"
@@ -61,7 +61,7 @@ VALIDATION_ARGS=(
 )
 
 # Combine all arguments and launch training
-accelerate launch --config_file accelerate_config.yaml train.py \
+/home/jqf8qm/miniforge3/envs/spadiff2/bin/accelerate launch --config_file /project/sds-rise/ethan/SpaDiff_Sep3/CogVideo/finetune/accelerate_config.yaml /project/sds-rise/ethan/SpaDiff_Sep3/CogVideo/finetune/train.py \
     "${MODEL_ARGS[@]}" \
     "${OUTPUT_ARGS[@]}" \
     "${DATA_ARGS[@]}" \

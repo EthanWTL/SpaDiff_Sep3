@@ -1,0 +1,1 @@
+export HF_HOME=/project/sds-rise/ethan/SpaDiff_Sep3/huggingface

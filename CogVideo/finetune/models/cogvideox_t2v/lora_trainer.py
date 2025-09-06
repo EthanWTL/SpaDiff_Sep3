@@ -5,7 +5,7 @@ from diffusers import (
     AutoencoderKLCogVideoX,
     CogVideoXDPMScheduler,
     CogVideoXPipeline,
-    CogVideoXTransformer3DModel,
+    #CogVideoXTransformer3DModel,
 )
 from diffusers.models.embeddings import get_3d_rotary_pos_embed
 from PIL import Image
@@ -17,6 +17,8 @@ from finetune.trainer import Trainer
 from finetune.utils import unwrap_model
 
 from ..utils import register
+
+from subclasses.cogvideox_2b_transformer_imgproj import CogVideoXTransformer3DWithImgProj
 
 
 class CogVideoXT2VLoraTrainer(Trainer):
@@ -35,8 +37,8 @@ class CogVideoXT2VLoraTrainer(Trainer):
             model_path, subfolder="text_encoder"
         )
 
-        components.transformer = CogVideoXTransformer3DModel.from_pretrained(
-            model_path, subfolder="transformer"
+        components.transformer = CogVideoXTransformer3DWithImgProj.from_pretrained(
+            model_path, subfolder="transformer", low_cpu_mem_usage=False
         )
 
         components.vae = AutoencoderKLCogVideoX.from_pretrained(model_path, subfolder="vae")
@@ -101,12 +103,39 @@ class CogVideoXT2VLoraTrainer(Trainer):
 
     @override
     def compute_loss(self, batch) -> torch.Tensor:
-        prompt_embedding = batch["prompt_embedding"]
-        latent = batch["encoded_videos"]
+        # Updated for maze dataloader format
+        prompts = batch["prompt"]  # List of text strings
+        flow_videos = batch["flow_hsv"]  # [B, T, 3, H, W] - optical flow sequences (already has 3 channels)
+        # Check the shape of the flow_videos
+        assert flow_videos.shape[2] == 3, f"Expected 3 channels, got {flow_videos.shape[2]}"
+        images = batch["image"]  # [B, 3, H, W] - already normalized to [-1, 1]
+        
+        batch_size = flow_videos.shape[0]
+        
+        # 1. Encode text prompts
+        prompt_embeddings = []
+        for prompt in prompts:
+            prompt_emb = self.encode_text(prompt)  # [1, seq_len, hidden_size]
+            prompt_embeddings.append(prompt_emb[0])  # Remove batch dim -> [seq_len, hidden_size]
+        prompt_embedding = torch.stack(prompt_embeddings)  # [B, seq_len, hidden_size]
+        
+        
+
+        # 2. Encode flow videos - treat flow as video frames
+        # Convert flow from [B, T, 3, H, W] to [B, 3, T, H, W] for VAE encoding
+        flow_videos = flow_videos.permute(0, 2, 1, 3, 4)  # [B, 3, T, H, W]
+        # Ensure flow_videos are on the correct device and dtype
+        flow_videos = flow_videos.to(device=self.accelerator.device, dtype=self.state.weight_dtype)
+        latent = self.encode_video(flow_videos)  # Encode as if it's a video
+        
+        # Ensure all tensors are on the same device
+        prompt_embedding = prompt_embedding.to(device=self.accelerator.device, dtype=self.state.weight_dtype)
+        images = images.to(device=self.accelerator.device, dtype=self.state.weight_dtype)
 
         # Shape of prompt_embedding: [B, seq_len, hidden_size]
         # Shape of latent: [B, C, F, H, W]
-
+        # Shape of images: [B, C, H, W]
+    
         patch_size_t = self.state.transformer_config.patch_size_t
         if patch_size_t is not None:
             ncopy = latent.shape[2] % patch_size_t
@@ -121,6 +150,21 @@ class CogVideoXT2VLoraTrainer(Trainer):
         _, seq_len, _ = prompt_embedding.shape
         prompt_embedding = prompt_embedding.view(batch_size, seq_len, -1).to(dtype=latent.dtype)
 
+        # Add frame dimension to images [B,C,H,W] -> [B,C,F,H,W]
+        images = images.unsqueeze(2)
+        # Add noise to images
+        image_noise_sigma = torch.normal(
+            mean=-3.0, std=0.5, size=(1,), device=self.accelerator.device
+        )
+        image_noise_sigma = torch.exp(image_noise_sigma).to(dtype=images.dtype)
+        noisy_images = (
+            images + torch.randn_like(images) * image_noise_sigma[:, None, None, None, None]
+        )
+        image_latent_dist = self.components.vae.encode(
+            noisy_images.to(dtype=self.components.vae.dtype)
+        ).latent_dist
+        image_latents = image_latent_dist.sample() * self.components.vae.config.scaling_factor
+
         # Sample a random timestep for each sample
         timesteps = torch.randint(
             0,
@@ -130,11 +174,26 @@ class CogVideoXT2VLoraTrainer(Trainer):
         )
         timesteps = timesteps.long()
 
-        # Add noise to latent
-        latent = latent.permute(0, 2, 1, 3, 4)  # from [B, C, F, H, W] to [B, F, C, H, W]
-        noise = torch.randn_like(latent)
-        latent_added_noise = self.components.scheduler.add_noise(latent, noise, timesteps)
+        # from [B, C, F, H, W] to [B, F, C, H, W]
+        latent = latent.permute(0, 2, 1, 3, 4)
+        image_latents = image_latents.permute(0, 2, 1, 3, 4)
+        assert (latent.shape[0], *latent.shape[2:]) == (
+            image_latents.shape[0],
+            *image_latents.shape[2:],
+        )
 
+        # Padding image_latents to the same frame number as latent
+        padding_shape = (latent.shape[0], latent.shape[1] - 1, *latent.shape[2:])
+        latent_padding = image_latents.new_zeros(padding_shape)
+        image_latents = torch.cat([image_latents, latent_padding], dim=1)
+
+        # Add noise to latent
+        noise = torch.randn_like(latent)
+        latent_noisy = self.components.scheduler.add_noise(latent, noise, timesteps)
+
+        # Concatenate latent and image_latents in the channel dimension
+        #latent_img_noisy = torch.cat([latent_noisy, image_latents], dim=2)
+        #breakpoint()
         # Prepare rotary embeds
         vae_scale_factor_spatial = 2 ** (len(self.components.vae.config.block_out_channels) - 1)
         transformer_config = self.state.transformer_config
@@ -151,18 +210,26 @@ class CogVideoXT2VLoraTrainer(Trainer):
             else None
         )
 
-        # Predict noise
+        # Predict noise, For CogVideoX1.5 Only.
+        ofs_emb = (
+            None
+            if self.state.transformer_config.ofs_embed_dim is None
+            else latent.new_full((1,), fill_value=2.0)
+        )
+        
         predicted_noise = self.components.transformer(
-            hidden_states=latent_added_noise,
+            hidden_states=latent_noisy,
             encoder_hidden_states=prompt_embedding,
+            img_hidden_states=image_latents,
             timestep=timesteps,
+            ofs=ofs_emb,
             image_rotary_emb=rotary_emb,
             return_dict=False,
         )[0]
 
         # Denoise
         latent_pred = self.components.scheduler.get_velocity(
-            predicted_noise, latent_added_noise, timesteps
+            predicted_noise, latent_noisy, timesteps
         )
 
         alphas_cumprod = self.components.scheduler.alphas_cumprod[timesteps]

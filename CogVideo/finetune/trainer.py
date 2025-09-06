@@ -49,6 +49,9 @@ from finetune.utils import (
     unwrap_model,
 )
 
+from CogVideo.finetune.dataloader.loader import build_all_loaders
+from CogVideo.finetune.dataloader.flow_norm import load_stats, make_normalizing_collate
+
 
 logger = get_logger(LOG_NAME, LOG_LEVEL)
 
@@ -73,6 +76,7 @@ class Trainer:
         )
 
         self.components: Components = self.load_components()
+
         self.accelerator: Accelerator = None
         self.dataset: Dataset = None
         self.data_loader: DataLoader = None
@@ -158,67 +162,87 @@ class Trainer:
 
         self.state.transformer_config = self.components.transformer.config
 
+    #prepare dataset
     def prepare_dataset(self) -> None:
-        logger.info("Initializing dataset and dataloader")
+        """Prepare datasets and dataloaders for training, validation, and testing."""
 
-        if self.args.model_type == "i2v":
-            self.dataset = I2VDatasetWithResize(
-                **(self.args.model_dump()),
-                device=self.accelerator.device,
-                max_num_frames=self.state.train_frames,
-                height=self.state.train_height,
-                width=self.state.train_width,
-                trainer=self,
-            )
-        elif self.args.model_type == "t2v":
-            self.dataset = T2VDatasetWithResize(
-                **(self.args.model_dump()),
-                device=self.accelerator.device,
-                max_num_frames=self.state.train_frames,
-                height=self.state.train_height,
-                width=self.state.train_width,
-                trainer=self,
-            )
-        else:
-            raise ValueError(f"Invalid model type: {self.args.model_type}")
+        self._freeze_and_move_models()
+        logger.info("Initializing maze flow dataset and dataloader...")
 
-        # Prepare VAE and text encoder for encoding
+        # Build datasets and loaders
+        train_ds, val_ds, test_ds = self._build_datasets()
+        train_dl, val_dl, test_dl = self._build_dataloaders(train_ds, val_ds, test_ds)
+
+        # Store for training
+        self.dataset, self.data_loader = train_ds, train_dl
+        self.val_dataset, self.val_data_loader = val_ds, val_dl
+        self.test_dataset, self.test_data_loader = test_ds, test_dl
+
+        logger.info(f"Dataset initialized with {len(train_ds)} training samples")
+        logger.info(f"Training dataloader has {len(train_dl)} batches")
+        if val_dl: logger.info(f"Validation dataloader has {len(val_dl)} batches")
+        if test_dl: logger.info(f"Test dataloader has {len(test_dl)} batches")
+
+    def _freeze_and_move_models(self) -> None:
         self.components.vae.requires_grad_(False)
         self.components.text_encoder.requires_grad_(False)
-        self.components.vae = self.components.vae.to(
-            self.accelerator.device, dtype=self.state.weight_dtype
-        )
-        self.components.text_encoder = self.components.text_encoder.to(
-            self.accelerator.device, dtype=self.state.weight_dtype
-        )
 
-        # Precompute latent for video and prompt embedding
-        logger.info("Precomputing latent for video and prompt embedding ...")
-        tmp_data_loader = torch.utils.data.DataLoader(
-            self.dataset,
-            collate_fn=self.collate_fn,
-            batch_size=1,
-            num_workers=0,
-            pin_memory=self.args.pin_memory,
-        )
-        tmp_data_loader = self.accelerator.prepare_data_loader(tmp_data_loader)
-        for _ in tmp_data_loader:
-            ...
-        self.accelerator.wait_for_everyone()
-        logger.info("Precomputing latent for video and prompt embedding ... Done")
+        device, dtype = self.accelerator.device, self.state.weight_dtype
+        self.components.vae = self.components.vae.to(device, dtype=dtype)
+        self.components.text_encoder = self.components.text_encoder.to(device, dtype=dtype)
 
-        unload_model(self.components.vae)
-        unload_model(self.components.text_encoder)
-        free_memory()
+    def _build_datasets(self):
+        train_jsonl = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/10000maze_720_480/info_labels.jsonl"
+        train_images = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/10000maze_720_480/images"
+        val_jsonl   = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/validation/info_labels.jsonl"
+        val_images  = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/validation/images"
+        test_jsonl  = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/evaluation/info_labels.jsonl"
+        test_images = "/project/sds-rise/ethan/SpaDiff_Sep3/datasets/maze/evaluation/images"
 
-        self.data_loader = torch.utils.data.DataLoader(
-            self.dataset,
-            collate_fn=self.collate_fn,
+        (train_ds, _), (val_ds, _), (test_ds, _) = build_all_loaders(
+            train_jsonl=train_jsonl, train_images=train_images,
+            val_jsonl=val_jsonl, val_images=val_images,
+            test_jsonl=test_jsonl, test_images=test_images,
             batch_size=self.args.batch_size,
             num_workers=self.args.num_workers,
-            pin_memory=self.args.pin_memory,
-            shuffle=True,
+            seq_len=self.state.train_frames,
+            return_flow_seq=False,
+            return_image_bg=True,
+            return_hsv_seq=True,
+            return_hsv_channels_seq=False,
+            return_prompt=True,
+            hsv_clip_mag=None,
+            hsv_saturation=1.0,
         )
+        return train_ds, val_ds, test_ds
+
+    def _build_dataloaders(self, train_ds, val_ds, test_ds):
+        from torch.utils.data import DataLoader
+        from CogVideo.finetune.dataloader.flow_norm import load_stats, make_normalizing_collate
+        from torch.utils.data._utils.collate import default_collate
+        import os
+
+        stats_path = os.path.join("CogVideo/dataloader", "flow_norm_stats_10000maze.json")
+
+        try:
+            scale_mag = load_stats(stats_path)["max_mag"]
+            logger.info(f"Loaded flow normalization scale_mag: {scale_mag}")
+            collate_fn = make_normalizing_collate(default_collate, scale_mag, key="flow", mode="mag", clip=True)
+        except FileNotFoundError:
+            logger.warning(f"Flow normalization stats not found at {stats_path}, using unnormalized data")
+            collate_fn = default_collate
+
+        train_dl = DataLoader(train_ds, batch_size=self.args.batch_size, shuffle=True,
+                            collate_fn=collate_fn, num_workers=self.args.num_workers,
+                            pin_memory=self.args.pin_memory)
+        val_dl = DataLoader(val_ds, batch_size=self.args.batch_size, shuffle=False,
+                            collate_fn=collate_fn, num_workers=self.args.num_workers,
+                            pin_memory=self.args.pin_memory) if val_ds else None
+        test_dl = DataLoader(test_ds, batch_size=self.args.batch_size, shuffle=False,
+                            collate_fn=collate_fn, num_workers=self.args.num_workers,
+                            pin_memory=self.args.pin_memory) if test_ds else None
+
+        return train_dl, val_dl, test_dl
 
     def prepare_trainable_parameters(self):
         logger.info("Initializing trainable parameters")
@@ -432,7 +456,6 @@ class Trainer:
             for step, batch in enumerate(self.data_loader):
                 logger.debug(f"Starting step {step + 1}")
                 logs = {}
-
                 with accelerator.accumulate(models_to_accumulate):
                     # These weighting schemes use a uniform timestep sampling and instead post-weight the loss
                     loss = self.compute_loss(batch)
@@ -500,165 +523,59 @@ class Trainer:
         accelerator.end_training()
 
     def validate(self, step: int) -> None:
-        logger.info("Starting validation")
-
+        logger.info("Starting validation (reuse compute_loss, no artifacts)")
         accelerator = self.accelerator
-        num_validation_samples = len(self.state.validation_prompts)
 
-        if num_validation_samples == 0:
-            logger.warning("No validation samples found. Skipping validation.")
+        if self.val_data_loader is None or len(self.val_data_loader) == 0:
+            logger.warning("No validation dataloader found. Skipping validation.")
             return
 
+        # Eval mode, no grads
         self.components.transformer.eval()
         torch.set_grad_enabled(False)
 
         memory_statistics = get_memory_statistics()
         logger.info(f"Memory before validation start: {json.dumps(memory_statistics, indent=4)}")
 
-        #####  Initialize pipeline  #####
-        pipe = self.initialize_pipeline()
+        # Optional: limit validation batches via CLI/args
+        max_val_batches = getattr(self.args, "max_val_batches", None)
 
-        if self.state.using_deepspeed:
-            # Can't using model_cpu_offload in deepspeed,
-            # so we need to move all components in pipe to device
-            # pipe.to(self.accelerator.device, dtype=self.state.weight_dtype)
-            self.__move_components_to_device(
-                dtype=self.state.weight_dtype, ignore_list=["transformer"]
-            )
-        else:
-            # if not using deepspeed, use model_cpu_offload to further reduce memory usage
-            # Or use pipe.enable_sequential_cpu_offload() to further reduce memory usage
-            pipe.enable_model_cpu_offload(device=self.accelerator.device)
+        # Accumulate sum of losses * batch_size and total samples for an unbiased global mean
+        local_sum = torch.zeros(1, device=accelerator.device, dtype=torch.float32)
+        local_count = torch.zeros(1, device=accelerator.device, dtype=torch.float32)
 
-            # Convert all model weights to training dtype
-            # Note, this will change LoRA weights in self.components.transformer to training dtype, rather than keep them in fp32
-            pipe = pipe.to(dtype=self.state.weight_dtype)
+        for bidx, batch in enumerate(self.val_data_loader):
+            if (max_val_batches is not None) and (bidx >= max_val_batches):
+                break
 
-        #################################
+            # compute_loss already mirrors your training objective
+            with self.accelerator.autocast(), torch.no_grad():
+                loss = self.compute_loss(batch)  # scalar mean over the local batch
 
-        all_processes_artifacts = []
-        for i in range(num_validation_samples):
-            if self.state.using_deepspeed and self.accelerator.deepspeed_plugin.zero_stage != 3:
-                # Skip current validation on all processes but one
-                if i % accelerator.num_processes != accelerator.process_index:
-                    continue
+            # Weight by batch size so different last-batch sizes don’t bias the global mean
+            bsz = 1 #batch["flow"].shape[0] if isinstance(batch, dict) and "flow" in batch else 1
+            local_sum += loss.detach() * bsz
+            local_count += bsz
 
-            prompt = self.state.validation_prompts[i]
-            image = self.state.validation_images[i]
-            video = self.state.validation_videos[i]
-
-            if image is not None:
-                image = preprocess_image_with_resize(
-                    image, self.state.train_height, self.state.train_width
-                )
-                # Convert image tensor (C, H, W) to PIL images
-                image = image.to(torch.uint8)
-                image = image.permute(1, 2, 0).cpu().numpy()
-                image = Image.fromarray(image)
-
-            if video is not None:
-                video = preprocess_video_with_resize(
-                    video, self.state.train_frames, self.state.train_height, self.state.train_width
-                )
-                # Convert video tensor (F, C, H, W) to list of PIL images
-                video = video.round().clamp(0, 255).to(torch.uint8)
-                video = [Image.fromarray(frame.permute(1, 2, 0).cpu().numpy()) for frame in video]
-
-            logger.debug(
-                f"Validating sample {i + 1}/{num_validation_samples} on process {accelerator.process_index}. Prompt: {prompt}",
-                main_process_only=False,
-            )
-            validation_artifacts = self.validation_step(
-                {"prompt": prompt, "image": image, "video": video}, pipe
-            )
-
-            if (
-                self.state.using_deepspeed
-                and self.accelerator.deepspeed_plugin.zero_stage == 3
-                and not accelerator.is_main_process
-            ):
-                continue
-
-            prompt_filename = string_to_filename(prompt)[:25]
-            # Calculate hash of reversed prompt as a unique identifier
-            reversed_prompt = prompt[::-1]
-            hash_suffix = hashlib.md5(reversed_prompt.encode()).hexdigest()[:5]
-
-            artifacts = {
-                "image": {"type": "image", "value": image},
-                "video": {"type": "video", "value": video},
-            }
-            for i, (artifact_type, artifact_value) in enumerate(validation_artifacts):
-                artifacts.update(
-                    {f"artifact_{i}": {"type": artifact_type, "value": artifact_value}}
-                )
-            logger.debug(
-                f"Validation artifacts on process {accelerator.process_index}: {list(artifacts.keys())}",
-                main_process_only=False,
-            )
-
-            for key, value in list(artifacts.items()):
-                artifact_type = value["type"]
-                artifact_value = value["value"]
-                if artifact_type not in ["image", "video"] or artifact_value is None:
-                    continue
-
-                extension = "png" if artifact_type == "image" else "mp4"
-                filename = f"validation-{step}-{accelerator.process_index}-{prompt_filename}-{hash_suffix}.{extension}"
-                validation_path = self.args.output_dir / "validation_res"
-                validation_path.mkdir(parents=True, exist_ok=True)
-                filename = str(validation_path / filename)
-
-                if artifact_type == "image":
-                    logger.debug(f"Saving image to {filename}")
-                    artifact_value.save(filename)
-                    artifact_value = wandb.Image(filename)
-                elif artifact_type == "video":
-                    logger.debug(f"Saving video to {filename}")
-                    export_to_video(artifact_value, filename, fps=self.args.gen_fps)
-                    artifact_value = wandb.Video(filename, caption=prompt)
-
-                all_processes_artifacts.append(artifact_value)
-
-        all_artifacts = gather_object(all_processes_artifacts)
+        # Cross-process aggregation (works with DDP/ZeRO)
+        try:
+            total_sum = accelerator.reduce(local_sum, reduction="sum")
+            total_count = accelerator.reduce(local_count, reduction="sum")
+        except Exception:
+            # Fallback for older accelerate: gather then sum
+            total_sum = accelerator.gather(local_sum).sum()
+            total_count = accelerator.gather(local_count).sum()
 
         if accelerator.is_main_process:
-            tracker_key = "validation"
+            val_loss = (total_sum / total_count).item()
             for tracker in accelerator.trackers:
                 if tracker.name == "wandb":
-                    image_artifacts = [
-                        artifact for artifact in all_artifacts if isinstance(artifact, wandb.Image)
-                    ]
-                    video_artifacts = [
-                        artifact for artifact in all_artifacts if isinstance(artifact, wandb.Video)
-                    ]
-                    tracker.log(
-                        {
-                            tracker_key: {"images": image_artifacts, "videos": video_artifacts},
-                        },
-                        step=step,
-                    )
+                    tracker.log({"val/latent_loss": val_loss}, step=step)
+            logger.info(f"Validation latent loss (global mean over {int(total_count.item())} samples): {val_loss:.6f}")
 
-        ##########  Clean up  ##########
-        if self.state.using_deepspeed:
-            del pipe
-            # Unload models except those needed for training
-            self.__move_components_to_cpu(unload_list=self.UNLOAD_LIST)
-        else:
-            pipe.remove_all_hooks()
-            del pipe
-            # Load models except those not needed for training
-            self.__move_components_to_device(
-                dtype=self.state.weight_dtype, ignore_list=self.UNLOAD_LIST
-            )
-            self.components.transformer.to(self.accelerator.device, dtype=self.state.weight_dtype)
-
-            # Change trainable weights back to fp32 to keep with dtype after prepare the model
-            cast_training_params([self.components.transformer], dtype=torch.float32)
-
+        # Clean up & restore
         free_memory()
         accelerator.wait_for_everyone()
-        ################################
 
         memory_statistics = get_memory_statistics()
         logger.info(f"Memory after validation end: {json.dumps(memory_statistics, indent=4)}")
@@ -674,8 +591,6 @@ class Trainer:
         self.prepare_trainable_parameters()
         self.prepare_optimizer()
         self.prepare_for_training()
-        if self.args.do_validation:
-            self.prepare_for_validation()
         self.prepare_trackers()
         self.train()
 
