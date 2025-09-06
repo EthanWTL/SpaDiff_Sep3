@@ -1,6 +1,6 @@
 compute_environment: LOCAL_MACHINE
 
-gpu_ids: "0"
+gpu_ids: "6"
 num_processes: 1  # should be the same as the number of GPUs
 
 debug: false

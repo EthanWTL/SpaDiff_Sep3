@@ -1,6 +1,7 @@
 datasets/
 huggingface/
 model_finetuned/
+wandb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

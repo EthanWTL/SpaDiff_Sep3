@@ -96,6 +96,12 @@ class CogVideoXT2VLoraTrainer(Trainer):
         std  = torch.tensor([0.229, 0.224, 0.225], device=x01.device, dtype=x01.dtype)[None, :, None, None]
         return (x01 - mean) / std
 
+    def _imnet_normalize_sat(self, x01: torch.Tensor) -> torch.Tensor:
+        # x01: [B,3,H,W] in [0,1]
+        mean = torch.tensor([0.430, 0.411, 0.296], device=x01.device, dtype=x01.dtype)[None, :, None, None]
+        std  = torch.tensor([0.213, 0.156, 0.143], device=x01.device, dtype=x01.dtype)[None, :, None, None]
+        return (x01 - mean) / std
+
     @torch.no_grad()
     def encode_dino(self, images: torch.Tensor):
         """
@@ -167,10 +173,9 @@ class CogVideoXT2VLoraTrainer(Trainer):
         images = images.to(device=self.accelerator.device, dtype=self.state.weight_dtype)
         
         images01 = (images.float() + 1.0) / 2.0           # [0,1] in fp32
-        images_dino = self._imnet_normalize(images01)     # fp32 normalize
+        images_dino = self._imnet_normalize_sat(images01)     # fp32 normalize
         images_dino = images_dino.to(self.accelerator.device, dtype=self.state.weight_dtype)
         images_patch_token = self.encode_dino(images=images_dino)
-        breakpoint()
         # Shape of prompt_embedding: [B, seq_len, hidden_size]
         # Shape of latent: [B, C, F, H, W]
         # Shape of images: [B, C, H, W]

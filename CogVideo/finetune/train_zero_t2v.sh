@@ -9,12 +9,12 @@ MODEL_ARGS=(
     --model_name "cogvideox-t2v"  # ["cogvideox-t2v"]
     --model_type "t2v"
     --training_type "sft"
-    --dino_path "/project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/dinov3-vit7b16-pretrain-lvd1689m"
+    --dino_path "/project/sds-rise/ethan/SpaDiff_Sep3/huggingface/models/dinov3-vit7b16-pretrain-sat493m"
 )
 
 # Output Configuration
 OUTPUT_ARGS=(
-    --output_dir "/project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca-dino"
+    --output_dir "/project/sds-rise/ethan/SpaDiff_Sep3/model_finetuned/raw/CogVideoX-2b-hsv-rgb-ca-dino-sat"
     --report_to "wandb"
 )
 
